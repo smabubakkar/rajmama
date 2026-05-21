@@ -10,11 +10,26 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 Intraday High / Low Time Finder")
+st.title("📈 Intraday High / Low Time Finder (IST)")
+
+st.write("""
+Get:
+- Day High
+- Day Low
+- High Time (IST)
+- Low Time (IST)
+
+for multiple stocks.
+""")
+
+# =====================================
+# INPUTS
+# =====================================
 
 stock_input = st.text_area(
     "Enter Stock Codes (comma separated)",
-    placeholder="RELIANCE.NS, TCS.NS"
+    placeholder="RELIANCE.NS, TCS.NS, INFY.NS",
+    height=120
 )
 
 col1, col2 = st.columns(2)
@@ -25,7 +40,15 @@ with col1:
 with col2:
     end_date = st.date_input("End Date")
 
+# =====================================
+# BUTTON
+# =====================================
+
 if st.button("Fetch Data"):
+
+    if not stock_input.strip():
+        st.warning("Please enter stock symbols.")
+        st.stop()
 
     stock_list = [
         s.strip().upper()
@@ -41,7 +64,10 @@ if st.button("Fetch Data"):
 
         try:
 
-            # 5-minute data
+            # =====================================
+            # DOWNLOAD 5 MIN DATA
+            # =====================================
+
             df = yf.download(
                 symbol,
                 start=start_date,
@@ -54,55 +80,115 @@ if st.button("Fetch Data"):
             if df.empty:
                 continue
 
-            # Fix MultiIndex
+            # =====================================
+            # FIX MULTI INDEX
+            # =====================================
+
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
             df.reset_index(inplace=True)
 
-            # Rename Datetime column
+            # =====================================
+            # RENAME DATETIME COLUMN
+            # =====================================
+
             if "Datetime" in df.columns:
-                df.rename(columns={"Datetime": "DateTime"}, inplace=True)
+                df.rename(
+                    columns={"Datetime": "DateTime"},
+                    inplace=True
+                )
 
-            df["DateTime"] = pd.to_datetime(df["DateTime"])
+            # =====================================
+            # CONVERT TO IST
+            # =====================================
 
-            # Extract Date + Time
+            df["DateTime"] = pd.to_datetime(
+                df["DateTime"],
+                utc=True
+            )
+
+            df["DateTime"] = df["DateTime"].dt.tz_convert(
+                "Asia/Kolkata"
+            )
+
+            # =====================================
+            # EXTRACT DATE + TIME
+            # =====================================
+
             df["Date"] = df["DateTime"].dt.date
-            df["Time"] = df["DateTime"].dt.strftime("%H:%M")
+
+            df["Time"] = df["DateTime"].dt.strftime(
+                "%H:%M"
+            )
+
+            # =====================================
+            # GROUP BY DATE
+            # =====================================
 
             grouped = df.groupby("Date")
 
             for date, day_df in grouped:
 
-                high_value = round(day_df["High"].max(), 2)
-                low_value = round(day_df["Low"].min(), 2)
+                # Day High
+                high_value = round(
+                    float(day_df["High"].max()),
+                    2
+                )
 
+                # Day Low
+                low_value = round(
+                    float(day_df["Low"].min()),
+                    2
+                )
+
+                # High Row
                 high_row = day_df.loc[
                     day_df["High"].idxmax()
                 ]
 
+                # Low Row
                 low_row = day_df.loc[
                     day_df["Low"].idxmin()
                 ]
 
+                # Open / Close
+                open_price = round(
+                    float(day_df.iloc[0]["Open"]),
+                    2
+                )
+
+                close_price = round(
+                    float(day_df.iloc[-1]["Close"]),
+                    2
+                )
+
                 final_rows.append({
+
                     "Stock": symbol,
                     "Date": str(date),
 
                     "Day High": high_value,
-                    "High Time": high_row["Time"],
+                    "High Time (IST)": high_row["Time"],
 
                     "Day Low": low_value,
-                    "Low Time": low_row["Time"],
+                    "Low Time (IST)": low_row["Time"],
 
-                    "Open": round(float(day_df.iloc[0]["Open"]), 2),
-                    "Close": round(float(day_df.iloc[-1]["Close"]), 2),
+                    "Open": open_price,
+                    "Close": close_price
                 })
 
         except Exception as e:
+
             st.error(f"{symbol} -> {str(e)}")
 
-        progress.progress((stock_index + 1) / len(stock_list))
+        progress.progress(
+            (stock_index + 1) / len(stock_list)
+        )
+
+    # =====================================
+    # FINAL OUTPUT
+    # =====================================
 
     if final_rows:
 
@@ -121,10 +207,17 @@ if st.button("Fetch Data"):
             height=700
         )
 
-        # Excel Export
+        # =====================================
+        # EXCEL EXPORT
+        # =====================================
+
         output = BytesIO()
 
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        with pd.ExcelWriter(
+            output,
+            engine="openpyxl"
+        ) as writer:
+
             result_df.to_excel(
                 writer,
                 index=False,
@@ -136,7 +229,7 @@ if st.button("Fetch Data"):
         st.download_button(
             label="📥 Download Excel",
             data=output,
-            file_name="intraday_high_low.xlsx",
+            file_name="intraday_high_low_ist.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 

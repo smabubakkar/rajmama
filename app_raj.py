@@ -7,11 +7,11 @@ from io import BytesIO
 import time
 
 st.set_page_config(
-    page_title="Intraday High Low Finder",
+    page_title="Stock High Low Finder",
     layout="wide"
 )
 
-st.title("📈 Intraday High / Low Finder (IST)")
+st.title("📈 Stock High / Low Finder (IST)")
 
 st.write("""
 Features:
@@ -21,20 +21,21 @@ Features:
 - Low Time (IST)
 - Day of Week
 - Excel Download
+- Custom Interval Selection
 """)
 
-# =========================================
-# CACHE DOWNLOADS
-# =========================================
+# =====================================================
+# CACHE FUNCTION
+# =====================================================
 
 @st.cache_data(show_spinner=False)
-def fetch_stock_data(symbol, start_date, end_date):
+def fetch_stock_data(symbol, start_date, end_date, interval):
 
     df = yf.download(
         symbol,
         start=start_date,
         end=end_date + pd.Timedelta(days=1),
-        interval="5m",
+        interval=interval,
         progress=False,
         auto_adjust=False,
         threads=False
@@ -43,9 +44,9 @@ def fetch_stock_data(symbol, start_date, end_date):
     return df
 
 
-# =========================================
+# =====================================================
 # INPUTS
-# =========================================
+# =====================================================
 
 stock_input = st.text_area(
     "Enter Stock Codes (comma separated)",
@@ -61,24 +62,44 @@ with col1:
 with col2:
     end_date = st.date_input("End Date")
 
-# =========================================
-# BUTTON
-# =========================================
+
+# =====================================================
+# INTERVAL DROPDOWN
+# =====================================================
+
+interval = st.selectbox(
+    "Select Interval",
+    options=[
+        "5m",
+        "15m",
+        "30m",
+        "1h"
+    ],
+    index=1
+)
+
+days_diff = (end_date - start_date).days
+
+if interval == "5m" and days_diff > 60:
+    st.warning(
+        "5 minute data for large date ranges may hit Yahoo Finance rate limits."
+    )
+
+if interval == "15m" and days_diff > 120:
+    st.warning(
+        "15 minute data for large date ranges may hit Yahoo Finance rate limits."
+    )
+
+
+# =====================================================
+# FETCH BUTTON
+# =====================================================
 
 if st.button("Fetch Data"):
 
     if not stock_input.strip():
         st.warning("Please enter stock symbols.")
         st.stop()
-
-    # Yahoo limitation warning
-    days_diff = (end_date - start_date).days
-
-    if days_diff > 60:
-        st.warning(
-            "Yahoo Finance intraday data works best within 60 days. "
-            "Larger ranges may fail or get rate-limited."
-        )
 
     stock_list = [
         s.strip().upper()
@@ -94,38 +115,36 @@ if st.button("Fetch Data"):
 
         try:
 
-            # =========================================
-            # SMALL DELAY TO AVOID RATE LIMIT
-            # =========================================
-
+            # Small delay to reduce rate limit
             time.sleep(1)
 
-            # =========================================
+            # =====================================================
             # DOWNLOAD DATA
-            # =========================================
+            # =====================================================
 
             df = fetch_stock_data(
                 symbol,
                 start_date,
-                end_date
+                end_date,
+                interval
             )
 
             if df.empty:
                 st.warning(f"No data found for {symbol}")
                 continue
 
-            # =========================================
+            # =====================================================
             # FIX MULTI INDEX
-            # =========================================
+            # =====================================================
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
             df.reset_index(inplace=True)
 
-            # =========================================
+            # =====================================================
             # DATETIME COLUMN
-            # =========================================
+            # =====================================================
 
             if "Datetime" in df.columns:
                 df.rename(
@@ -133,9 +152,9 @@ if st.button("Fetch Data"):
                     inplace=True
                 )
 
-            # =========================================
+            # =====================================================
             # UTC → IST
-            # =========================================
+            # =====================================================
 
             df["DateTime"] = pd.to_datetime(
                 df["DateTime"],
@@ -146,9 +165,9 @@ if st.button("Fetch Data"):
                 "Asia/Kolkata"
             )
 
-            # =========================================
+            # =====================================================
             # EXTRACT DATE/TIME
-            # =========================================
+            # =====================================================
 
             df["Date"] = df["DateTime"].dt.date
 
@@ -158,14 +177,15 @@ if st.button("Fetch Data"):
 
             df["Day"] = df["DateTime"].dt.day_name()
 
-            # =========================================
+            # =====================================================
             # GROUP BY DATE
-            # =========================================
+            # =====================================================
 
             grouped = df.groupby("Date")
 
             for date, day_df in grouped:
 
+                # High / Low values
                 high_value = round(
                     float(day_df["High"].max()),
                     2
@@ -176,14 +196,17 @@ if st.button("Fetch Data"):
                     2
                 )
 
+                # High row
                 high_row = day_df.loc[
                     day_df["High"].idxmax()
                 ]
 
+                # Low row
                 low_row = day_df.loc[
                     day_df["Low"].idxmin()
                 ]
 
+                # Open / Close
                 open_price = round(
                     float(day_df.iloc[0]["Open"]),
                     2
@@ -210,7 +233,9 @@ if st.button("Fetch Data"):
                     "Day Low": low_value,
                     "Low Time (IST)": low_row["Time"],
 
-                    "Close": close_price
+                    "Close": close_price,
+
+                    "Interval Used": interval
                 })
 
         except Exception as e:
@@ -221,9 +246,9 @@ if st.button("Fetch Data"):
             (stock_index + 1) / len(stock_list)
         )
 
-    # =========================================
+    # =====================================================
     # FINAL OUTPUT
-    # =========================================
+    # =====================================================
 
     if final_rows:
 
@@ -242,9 +267,9 @@ if st.button("Fetch Data"):
             height=700
         )
 
-        # =========================================
+        # =====================================================
         # EXCEL EXPORT
-        # =========================================
+        # =====================================================
 
         output = BytesIO()
 
@@ -256,7 +281,7 @@ if st.button("Fetch Data"):
             result_df.to_excel(
                 writer,
                 index=False,
-                sheet_name="Intraday_High_Low"
+                sheet_name="Stock_High_Low"
             )
 
         output.seek(0)
@@ -264,7 +289,7 @@ if st.button("Fetch Data"):
         st.download_button(
             label="📥 Download Excel",
             data=output,
-            file_name="intraday_high_low_ist.xlsx",
+            file_name="stock_high_low_ist.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 

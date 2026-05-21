@@ -6,28 +6,15 @@ import yfinance as yf
 from io import BytesIO
 
 st.set_page_config(
-    page_title="Daily Stock High Low Export",
+    page_title="Intraday High Low Finder",
     layout="wide"
 )
 
-st.title("📈 Daily Stock High / Low Export")
-
-st.write("""
-Enter stock symbols separated by commas.
-
-Examples:
-- RELIANCE.NS, TCS.NS, INFY.NS
-- AAPL, MSFT, TSLA
-""")
-
-# =========================
-# INPUTS
-# =========================
+st.title("📈 Intraday High / Low Time Finder")
 
 stock_input = st.text_area(
-    "Enter Stock Codes",
-    height=120,
-    placeholder="RELIANCE.NS, TCS.NS, INFY.NS"
+    "Enter Stock Codes (comma separated)",
+    placeholder="RELIANCE.NS, TCS.NS"
 )
 
 col1, col2 = st.columns(2)
@@ -38,34 +25,28 @@ with col1:
 with col2:
     end_date = st.date_input("End Date")
 
-# =========================
-# BUTTON
-# =========================
-
-if st.button("Fetch Daily Data"):
-
-    if not stock_input.strip():
-        st.warning("Please enter stock symbols.")
-        st.stop()
+if st.button("Fetch Data"):
 
     stock_list = [
-        stock.strip().upper()
-        for stock in stock_input.split(",")
-        if stock.strip()
+        s.strip().upper()
+        for s in stock_input.split(",")
+        if s.strip()
     ]
 
-    all_data = []
+    final_rows = []
 
-    progress_bar = st.progress(0)
+    progress = st.progress(0)
 
-    for idx, symbol in enumerate(stock_list):
+    for stock_index, symbol in enumerate(stock_list):
 
         try:
 
+            # 5-minute data
             df = yf.download(
                 symbol,
                 start=start_date,
-                end=end_date,
+                end=end_date + pd.Timedelta(days=1),
+                interval="5m",
                 progress=False,
                 auto_adjust=False
             )
@@ -73,79 +54,81 @@ if st.button("Fetch Daily Data"):
             if df.empty:
                 continue
 
-            # Handle multi-index columns
+            # Fix MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # Reset index so Date becomes column
             df.reset_index(inplace=True)
 
-            # Keep only required columns
-            df = df[[
-                "Date",
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume"
-            ]]
+            # Rename Datetime column
+            if "Datetime" in df.columns:
+                df.rename(columns={"Datetime": "DateTime"}, inplace=True)
 
-            # Add stock column
-            df["Stock"] = symbol
+            df["DateTime"] = pd.to_datetime(df["DateTime"])
 
-            # Reorder columns
-            df = df[[
-                "Stock",
-                "Date",
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume"
-            ]]
+            # Extract Date + Time
+            df["Date"] = df["DateTime"].dt.date
+            df["Time"] = df["DateTime"].dt.strftime("%H:%M")
 
-            # Round prices
-            for col in ["Open", "High", "Low", "Close"]:
-                df[col] = df[col].round(2)
+            grouped = df.groupby("Date")
 
-            all_data.append(df)
+            for date, day_df in grouped:
+
+                high_value = round(day_df["High"].max(), 2)
+                low_value = round(day_df["Low"].min(), 2)
+
+                high_row = day_df.loc[
+                    day_df["High"].idxmax()
+                ]
+
+                low_row = day_df.loc[
+                    day_df["Low"].idxmin()
+                ]
+
+                final_rows.append({
+                    "Stock": symbol,
+                    "Date": str(date),
+
+                    "Day High": high_value,
+                    "High Time": high_row["Time"],
+
+                    "Day Low": low_value,
+                    "Low Time": low_row["Time"],
+
+                    "Open": round(float(day_df.iloc[0]["Open"]), 2),
+                    "Close": round(float(day_df.iloc[-1]["Close"]), 2),
+                })
 
         except Exception as e:
             st.error(f"{symbol} -> {str(e)}")
 
-        progress_bar.progress((idx + 1) / len(stock_list))
+        progress.progress((stock_index + 1) / len(stock_list))
 
-    # =========================
-    # FINAL OUTPUT
-    # =========================
+    if final_rows:
 
-    if all_data:
+        result_df = pd.DataFrame(final_rows)
 
-        final_df = pd.concat(all_data, ignore_index=True)
-
-        final_df["Date"] = pd.to_datetime(
-            final_df["Date"]
-        ).dt.strftime("%Y-%m-%d")
-
-        st.success("Data fetched successfully!")
-
-        st.dataframe(
-            final_df,
-            use_container_width=True,
-            height=600
+        result_df.sort_values(
+            by=["Stock", "Date"],
+            inplace=True
         )
 
-        # =========================
-        # EXCEL DOWNLOAD
-        # =========================
+        st.success("Completed!")
 
+        st.dataframe(
+            result_df,
+            use_container_width=True,
+            height=700
+        )
+
+        # Excel Export
         output = BytesIO()
 
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            final_df.to_excel(
+            result_df.to_excel(
                 writer,
                 index=False,
-                sheet_name="Daily_High_Low"
+                sheet_name="Intraday_High_Low"
             )
 
         output.seek(0)
@@ -153,7 +136,7 @@ if st.button("Fetch Daily Data"):
         st.download_button(
             label="📥 Download Excel",
             data=output,
-            file_name="daily_stock_high_low.xlsx",
+            file_name="intraday_high_low.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 

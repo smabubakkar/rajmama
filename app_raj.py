@@ -4,27 +4,48 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from io import BytesIO
+import time
 
 st.set_page_config(
     page_title="Intraday High Low Finder",
     layout="wide"
 )
 
-st.title("📈 Intraday High / Low Time Finder (IST)")
+st.title("📈 Intraday High / Low Finder (IST)")
 
 st.write("""
-Get:
+Features:
 - Day High
 - Day Low
 - High Time (IST)
 - Low Time (IST)
-
-for multiple stocks.
+- Day of Week
+- Excel Download
 """)
 
-# =====================================
+# =========================================
+# CACHE DOWNLOADS
+# =========================================
+
+@st.cache_data(show_spinner=False)
+def fetch_stock_data(symbol, start_date, end_date):
+
+    df = yf.download(
+        symbol,
+        start=start_date,
+        end=end_date + pd.Timedelta(days=1),
+        interval="5m",
+        progress=False,
+        auto_adjust=False,
+        threads=False
+    )
+
+    return df
+
+
+# =========================================
 # INPUTS
-# =====================================
+# =========================================
 
 stock_input = st.text_area(
     "Enter Stock Codes (comma separated)",
@@ -40,15 +61,24 @@ with col1:
 with col2:
     end_date = st.date_input("End Date")
 
-# =====================================
+# =========================================
 # BUTTON
-# =====================================
+# =========================================
 
 if st.button("Fetch Data"):
 
     if not stock_input.strip():
         st.warning("Please enter stock symbols.")
         st.stop()
+
+    # Yahoo limitation warning
+    days_diff = (end_date - start_date).days
+
+    if days_diff > 60:
+        st.warning(
+            "Yahoo Finance intraday data works best within 60 days. "
+            "Larger ranges may fail or get rate-limited."
+        )
 
     stock_list = [
         s.strip().upper()
@@ -64,34 +94,38 @@ if st.button("Fetch Data"):
 
         try:
 
-            # =====================================
-            # DOWNLOAD 5 MIN DATA
-            # =====================================
+            # =========================================
+            # SMALL DELAY TO AVOID RATE LIMIT
+            # =========================================
 
-            df = yf.download(
+            time.sleep(1)
+
+            # =========================================
+            # DOWNLOAD DATA
+            # =========================================
+
+            df = fetch_stock_data(
                 symbol,
-                start=start_date,
-                end=end_date + pd.Timedelta(days=1),
-                interval="5m",
-                progress=False,
-                auto_adjust=False
+                start_date,
+                end_date
             )
 
             if df.empty:
+                st.warning(f"No data found for {symbol}")
                 continue
 
-            # =====================================
+            # =========================================
             # FIX MULTI INDEX
-            # =====================================
+            # =========================================
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
             df.reset_index(inplace=True)
 
-            # =====================================
-            # RENAME DATETIME COLUMN
-            # =====================================
+            # =========================================
+            # DATETIME COLUMN
+            # =========================================
 
             if "Datetime" in df.columns:
                 df.rename(
@@ -99,9 +133,9 @@ if st.button("Fetch Data"):
                     inplace=True
                 )
 
-            # =====================================
-            # CONVERT TO IST
-            # =====================================
+            # =========================================
+            # UTC → IST
+            # =========================================
 
             df["DateTime"] = pd.to_datetime(
                 df["DateTime"],
@@ -112,9 +146,9 @@ if st.button("Fetch Data"):
                 "Asia/Kolkata"
             )
 
-            # =====================================
-            # EXTRACT DATE + TIME
-            # =====================================
+            # =========================================
+            # EXTRACT DATE/TIME
+            # =========================================
 
             df["Date"] = df["DateTime"].dt.date
 
@@ -122,37 +156,34 @@ if st.button("Fetch Data"):
                 "%H:%M"
             )
 
-            # =====================================
+            df["Day"] = df["DateTime"].dt.day_name()
+
+            # =========================================
             # GROUP BY DATE
-            # =====================================
+            # =========================================
 
             grouped = df.groupby("Date")
 
             for date, day_df in grouped:
 
-                # Day High
                 high_value = round(
                     float(day_df["High"].max()),
                     2
                 )
 
-                # Day Low
                 low_value = round(
                     float(day_df["Low"].min()),
                     2
                 )
 
-                # High Row
                 high_row = day_df.loc[
                     day_df["High"].idxmax()
                 ]
 
-                # Low Row
                 low_row = day_df.loc[
                     day_df["Low"].idxmin()
                 ]
 
-                # Open / Close
                 open_price = round(
                     float(day_df.iloc[0]["Open"]),
                     2
@@ -166,7 +197,12 @@ if st.button("Fetch Data"):
                 final_rows.append({
 
                     "Stock": symbol,
+
                     "Date": str(date),
+
+                    "Day": high_row["Day"],
+
+                    "Open": open_price,
 
                     "Day High": high_value,
                     "High Time (IST)": high_row["Time"],
@@ -174,7 +210,6 @@ if st.button("Fetch Data"):
                     "Day Low": low_value,
                     "Low Time (IST)": low_row["Time"],
 
-                    "Open": open_price,
                     "Close": close_price
                 })
 
@@ -186,9 +221,9 @@ if st.button("Fetch Data"):
             (stock_index + 1) / len(stock_list)
         )
 
-    # =====================================
+    # =========================================
     # FINAL OUTPUT
-    # =====================================
+    # =========================================
 
     if final_rows:
 
@@ -207,9 +242,9 @@ if st.button("Fetch Data"):
             height=700
         )
 
-        # =====================================
+        # =========================================
         # EXCEL EXPORT
-        # =====================================
+        # =========================================
 
         output = BytesIO()
 
